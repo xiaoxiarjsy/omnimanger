@@ -131,8 +131,30 @@
       <symbol id="icon-moon" viewBox="0 0 24 24">
         <path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5 9 9 0 1 0 20.5 14.5Z"></path>
       </symbol>
+      <symbol id="icon-arrow-left" viewBox="0 0 24 24">
+        <path d="m12 19-7-7 7-7"></path>
+        <path d="M19 12H5"></path>
+      </symbol>
+      <symbol id="icon-check-circle" viewBox="0 0 24 24">
+        <path d="M22 11.1V12a10 10 0 1 1-5.9-9.1"></path>
+        <path d="m9 11 3 3L22 4"></path>
+      </symbol>
+      <symbol id="icon-alert-circle" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="10"></circle>
+        <path d="M12 8v4"></path>
+        <path d="M12 16h.01"></path>
+      </symbol>
+      <symbol id="icon-list" viewBox="0 0 24 24">
+        <path d="M8 6h13"></path>
+        <path d="M8 12h13"></path>
+        <path d="M8 18h13"></path>
+        <path d="M3 6h.01"></path>
+        <path d="M3 12h.01"></path>
+        <path d="M3 18h.01"></path>
+      </symbol>
     </svg>
-    <main class="shell">
+    <a class="skip-link" href="#mainContent">跳到主要内容</a>
+    <main id="mainContent" class="shell" tabindex="-1">
       <header class="topbar">
         <div class="brand">
           <span class="brand-icon">
@@ -162,7 +184,9 @@
             <svg class="icon"><use href="#icon-user"></use></svg>
             <span>Signed out</span>
           </span>
-          <span id="saveStatus" class="status-pill neutral" role="status" aria-live="polite">未解锁</span>
+          <span id="saveStatus" class="status-pill neutral" data-state="locked" role="status" aria-live="polite">
+            未解锁
+          </span>
           <button id="themeToggleButton" class="theme-toggle" type="button" aria-label="切换明暗模式">
             <svg class="icon"><use href="#icon-moon"></use></svg>
             <span>深色</span>
@@ -245,10 +269,30 @@
               <span class="sr-only">新增账号</span>
             </button>
           </div>
-          <div id="entryList" class="entry-list" aria-label="账号列表"></div>
+          <div id="entryList" class="entry-list" role="listbox" aria-label="账号列表"></div>
         </aside>
 
-        <section class="detail-panel panel">
+        <section class="detail-panel panel" aria-labelledby="entryDetailTitle">
+          <h2 id="entryDetailTitle" class="sr-only">账号详情</h2>
+          <div class="mobile-detail-bar">
+            <button id="backToListButton" type="button">
+              <svg class="icon"><use href="#icon-arrow-left"></use></svg>
+              <span>账号列表</span>
+            </button>
+          </div>
+
+          <div id="detailEmptyState" class="detail-empty hidden">
+            <span class="section-icon">
+              <svg class="icon"><use href="#icon-list"></use></svg>
+            </span>
+            <strong>选择一个账号</strong>
+            <span>从左侧列表选择账号，或新建一条需要保存的信息。</span>
+            <button id="emptyAddButton" type="button" class="primary">
+              <svg class="icon"><use href="#icon-plus"></use></svg>
+              <span>新增账号</span>
+            </button>
+          </div>
+
           <form id="entryForm" autocomplete="off">
             <div class="detail-head">
               <label>
@@ -337,7 +381,7 @@
             </label>
           </form>
 
-          <div class="bottom-bar">
+          <div id="detailBottomBar" class="bottom-bar">
             <div class="button-row">
               <button id="saveButton" type="button" class="primary">
                 <svg class="icon"><use href="#icon-save"></use></svg>
@@ -361,8 +405,31 @@
           <span class="muted">低频操作已从主编辑区移到这里。</span>
         </div>
 
+        <div id="settingsTabs" class="settings-tabs" role="tablist" aria-label="设置分类">
+          <button type="button" data-settings-tab="security" data-active="true" role="tab" aria-selected="true">
+            <svg class="icon"><use href="#icon-lock"></use></svg>
+            <span>安全</span>
+          </button>
+          <button type="button" data-settings-tab="data" data-active="false" role="tab" aria-selected="false">
+            <svg class="icon"><use href="#icon-cloud-download"></use></svg>
+            <span>数据</span>
+          </button>
+          <button
+            id="adminSettingsTab"
+            class="hidden"
+            type="button"
+            data-settings-tab="admin"
+            data-active="false"
+            role="tab"
+            aria-selected="false"
+          >
+            <svg class="icon"><use href="#icon-settings"></use></svg>
+            <span>管理员</span>
+          </button>
+        </div>
+
         <div class="settings-grid">
-          <section class="panel settings-panel">
+          <section class="panel settings-panel" data-settings-section="security">
             <div class="settings-panel-head">
               <span class="section-icon">
                 <svg class="icon"><use href="#icon-clock"></use></svg>
@@ -395,7 +462,7 @@
             </div>
           </section>
 
-          <section class="panel settings-panel">
+          <section class="panel settings-panel" data-settings-section="data">
             <div class="settings-panel-head">
               <span class="section-icon">
                 <svg class="icon"><use href="#icon-cloud-download"></use></svg>
@@ -422,7 +489,7 @@
             </div>
           </section>
 
-          <section class="panel settings-panel">
+          <section class="panel settings-panel" data-settings-section="security">
             <div class="settings-panel-head">
               <span class="section-icon">
                 <svg class="icon"><use href="#icon-key"></use></svg>
@@ -440,7 +507,7 @@
             </div>
           </section>
 
-          <section id="adminPanel" class="panel settings-panel hidden">
+          <section id="adminPanel" class="panel settings-panel hidden" data-settings-section="admin">
             <div class="settings-panel-head">
               <span class="section-icon">
                 <svg class="icon"><use href="#icon-settings"></use></svg>
@@ -470,6 +537,8 @@
         </div>
       </section>
     </main>
+
+    <div id="toastRegion" class="toast-region" aria-live="polite" aria-atomic="false"></div>
 
     <template id="entryTemplate">
       <button class="entry-item" type="button">

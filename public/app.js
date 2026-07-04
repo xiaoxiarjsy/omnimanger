@@ -7,6 +7,8 @@ const KDF_ITERATIONS = 310000;
 const AUTH_KDF_ITERATIONS = 120000;
 const CLIPBOARD_CLEAR_MS = 30_000;
 const GENERATED_PASSWORD_LENGTH = 20;
+const SECRET_REVEAL_MS = 45_000;
+const TOAST_DURATION_MS = 3600;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const hasDocument = typeof document !== "undefined";
@@ -28,10 +30,15 @@ const state = {
   autoLockMinutes: 5,
   cacheDisabled: false,
   clipboardClearTimer: null,
+  passwordRevealTimer: null,
+  totpRevealTimer: null,
   passwordVisible: false,
   totpVisible: false,
   authMode: "login",
   appPage: "vault",
+  settingsSection: "security",
+  mobilePanel: "list",
+  online: true,
 };
 
 const $ = (id) => (hasDocument ? document.getElementById(id) : null);
@@ -44,6 +51,8 @@ const els = hasDocument
       appNav: $("appNav"),
       vaultNavButton: $("vaultNavButton"),
       settingsNavButton: $("settingsNavButton"),
+      settingsTabs: $("settingsTabs"),
+      adminSettingsTab: $("adminSettingsTab"),
       unlockForm: $("unlockForm"),
       unlockTitle: $("unlockTitle"),
       loginModeButton: $("loginModeButton"),
@@ -65,6 +74,9 @@ const els = hasDocument
       saveStatus: $("saveStatus"),
       searchInput: $("searchInput"),
       addEntryButton: $("addEntryButton"),
+      backToListButton: $("backToListButton"),
+      detailEmptyState: $("detailEmptyState"),
+      emptyAddButton: $("emptyAddButton"),
       entryList: $("entryList"),
       entryTemplate: $("entryTemplate"),
       entryForm: $("entryForm"),
@@ -91,8 +103,10 @@ const els = hasDocument
       pullButton: $("pullButton"),
       saveButton: $("saveButton"),
       lockButton: $("lockButton"),
+      detailBottomBar: $("detailBottomBar"),
       totpCode: $("totpCode"),
       totpTimerBar: $("totpTimerBar"),
+      toastRegion: $("toastRegion"),
       appDialog: $("appDialog"),
       appDialogForm: $("appDialogForm"),
       appDialogIcon: $("appDialogIcon"),
@@ -113,14 +127,20 @@ function init() {
   initDecorativeIcons();
   initTheme();
   initSecurityPreferences();
+  initConnectivity();
   els.loginEmail.value = localStorage.getItem(LAST_EMAIL_KEY) || "";
   const inviteToken = new URLSearchParams(location.search).get("invite") || "";
   els.inviteToken.value = inviteToken;
   setAuthMode(inviteToken ? "register" : "login");
+  setMobileVaultPanel("list");
+  showSettingsSection("security");
 
   els.themeToggleButton.addEventListener("click", toggleTheme);
-  els.vaultNavButton.addEventListener("click", () => showAppPage("vault"));
-  els.settingsNavButton.addEventListener("click", () => showAppPage("settings"));
+  els.vaultNavButton.addEventListener("click", () => navigateToAppPage("vault"));
+  els.settingsNavButton.addEventListener("click", () => navigateToAppPage("settings"));
+  els.appNav.addEventListener("keydown", handleAppNavKeydown);
+  els.settingsTabs.addEventListener("click", handleSettingsTabClick);
+  els.settingsTabs.addEventListener("keydown", handleSettingsTabKeydown);
   els.registrationOpenToggle.addEventListener("change", saveAdminSettings);
   els.createInviteButton.addEventListener("click", createInvite);
   els.unlockForm.addEventListener("submit", (event) => {
@@ -129,8 +149,16 @@ function init() {
   });
   els.loginModeButton.addEventListener("click", () => setAuthMode("login"));
   els.registerButton.addEventListener("click", () => setAuthMode("register"));
-  els.searchInput.addEventListener("input", renderEntries);
+  els.loginModeButton.addEventListener("keydown", handleAuthModeKeydown);
+  els.registerButton.addEventListener("keydown", handleAuthModeKeydown);
+  els.searchInput.addEventListener("input", () => {
+    renderEntries();
+    setMobileVaultPanel("list");
+  });
   els.addEntryButton.addEventListener("click", addEntry);
+  els.emptyAddButton.addEventListener("click", addEntry);
+  els.backToListButton.addEventListener("click", () => setMobileVaultPanel("list"));
+  els.entryList.addEventListener("keydown", handleEntryListKeydown);
   els.entryForm.addEventListener("input", handleEntryInput);
   els.generatePasswordButton.addEventListener("click", fillGeneratedPassword);
   els.togglePasswordButton.addEventListener("click", togglePassword);
@@ -149,8 +177,9 @@ function init() {
   document.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-copy]");
     if (!button) return;
-    copyInputValue(button.dataset.copy);
+    copyInputValue(button.dataset.copy, button);
   });
+  document.addEventListener("keydown", handleGlobalKeydown);
 
   setInterval(updateTotpDisplay, 1000);
   setInterval(lockIfHiddenTooLong, 30_000);
@@ -172,6 +201,7 @@ function init() {
     event.preventDefault();
     event.returnValue = "";
   });
+  window.addEventListener("hashchange", syncAppPageFromHash);
 
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js").catch(() => {});
@@ -211,11 +241,32 @@ function initSecurityPreferences() {
   els.localCacheToggle.checked = !state.cacheDisabled;
 }
 
+function initConnectivity() {
+  state.online = navigator.onLine !== false;
+  window.addEventListener("online", () => {
+    state.online = true;
+    if (state.vault) {
+      setSaveStatus(state.dirty ? "已联网，仍有未保存修改" : "已联网", state.dirty ? "dirty" : "synced");
+      showToast("网络已恢复", { tone: "success" });
+    }
+    updateBusyControls();
+  });
+  window.addEventListener("offline", () => {
+    state.online = false;
+    if (state.vault) {
+      setSaveStatus("离线：仅保存到本机", "offline");
+      showToast("当前离线", { message: "远端保存和拉取会暂时不可用。", tone: "warning" });
+    }
+    updateBusyControls();
+  });
+}
+
 function saveAutoLockPreference() {
   const minutes = Number(els.autoLockSelect.value);
   state.autoLockMinutes = Number.isFinite(minutes) ? minutes : 5;
   localStorage.setItem(AUTO_LOCK_KEY, String(state.autoLockMinutes));
   markActivity();
+  showToast("自动锁定已更新", { message: state.autoLockMinutes ? `${state.autoLockMinutes} 分钟` : "已关闭" });
 }
 
 function saveLocalCachePreference() {
@@ -223,8 +274,10 @@ function saveLocalCachePreference() {
   localStorage.setItem(CACHE_DISABLED_KEY, state.cacheDisabled ? "true" : "false");
   if (state.cacheDisabled && state.user) {
     localStorage.removeItem(getStorageKey(state.user.id));
-    els.saveStatus.textContent = "已关闭本地缓存";
+    setSaveStatus("本地缓存已关闭", "synced");
+    showToast("本地缓存已关闭");
   } else if (state.user && state.vault && state.key) {
+    showToast("本地缓存已开启");
     saveVaultNow(false);
   }
 }
@@ -248,6 +301,8 @@ function setAuthMode(mode) {
   els.registerButton.dataset.active = isRegister ? "true" : "false";
   els.loginModeButton.setAttribute("aria-selected", isRegister ? "false" : "true");
   els.registerButton.setAttribute("aria-selected", isRegister ? "true" : "false");
+  els.loginModeButton.tabIndex = isRegister ? -1 : 0;
+  els.registerButton.tabIndex = isRegister ? 0 : -1;
   setUnlockMessage("");
 }
 
@@ -292,10 +347,12 @@ async function authenticate(mode) {
 
     showVault();
     renderEntries();
-    selectEntry(state.vault.entries[0]?.id || null);
+    selectEntry(state.vault.entries[0]?.id || null, { openDetail: false });
+    setMobileVaultPanel("list");
     if (selected.source === "local") {
       state.dirty = true;
-      els.saveStatus.textContent = "本地版本较新，尚未同步";
+      setSaveStatus("本地版本较新，尚未同步", "dirty");
+      showToast("本地版本较新", { message: "已先打开本地副本，保存后会同步到 Cloudflare。", tone: "warning" });
     } else {
       await saveVaultNow(false);
     }
@@ -420,7 +477,7 @@ function normalizeEntry(entry) {
 function showVault() {
   els.lockedView.classList.add("hidden");
   els.appNav.classList.remove("hidden");
-  showAppPage("vault");
+  showAppPage(getHashAppPage(), { replaceHash: true });
   setInlineLabel(els.lockStatus, "Unlocked");
   setInlineIcon(els.lockStatus, "icon-unlock");
   setInlineLabel(els.syncStatus, state.user.email);
@@ -428,21 +485,177 @@ function showVault() {
 
   if (state.user.isAdmin) {
     els.adminPanel.classList.remove("hidden");
+    els.adminSettingsTab.classList.remove("hidden");
     loadAdminSettings();
   } else {
     els.adminPanel.classList.add("hidden");
+    els.adminSettingsTab.classList.add("hidden");
+    if (state.settingsSection === "admin") showSettingsSection("security");
   }
 }
 
-function showAppPage(page) {
+function navigateToAppPage(page) {
+  if (!state.vault) return;
+  showAppPage(page);
+}
+
+function getHashAppPage() {
+  return location.hash === "#settings" ? "settings" : "vault";
+}
+
+function syncAppPageFromHash() {
+  if (!state.vault) return;
+  showAppPage(getHashAppPage(), { updateHash: false });
+}
+
+function showAppPage(page, options = {}) {
   const showSettings = page === "settings";
   state.appPage = showSettings ? "settings" : "vault";
+  updateAppHash(state.appPage, options);
   els.vaultView.classList.toggle("hidden", showSettings);
   els.settingsView.classList.toggle("hidden", !showSettings);
-  els.vaultNavButton.dataset.active = showSettings ? "false" : "true";
-  els.settingsNavButton.dataset.active = showSettings ? "true" : "false";
-  els.vaultNavButton.setAttribute("aria-current", showSettings ? "false" : "page");
-  els.settingsNavButton.setAttribute("aria-current", showSettings ? "page" : "false");
+  setNavButtonState(els.vaultNavButton, !showSettings);
+  setNavButtonState(els.settingsNavButton, showSettings);
+  if (showSettings) {
+    showSettingsSection(state.settingsSection);
+  } else {
+    setMobileVaultPanel(state.mobilePanel || "list");
+  }
+}
+
+function updateAppHash(page, options) {
+  if (options.updateHash === false) return;
+  const nextHash = `#${page}`;
+  if (location.hash === nextHash) return;
+  const url = new URL(location.href);
+  url.hash = page;
+  const method = options.replaceHash ? "replaceState" : "pushState";
+  history[method](null, "", url);
+}
+
+function setNavButtonState(button, active) {
+  button.dataset.active = active ? "true" : "false";
+  button.setAttribute("aria-pressed", active ? "true" : "false");
+  if (active) {
+    button.setAttribute("aria-current", "page");
+  } else {
+    button.removeAttribute("aria-current");
+  }
+}
+
+function setMobileVaultPanel(panel) {
+  state.mobilePanel = panel === "detail" ? "detail" : "list";
+  els.vaultView.dataset.mobilePanel = state.mobilePanel;
+}
+
+function handleAppNavKeydown(event) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const nextPage = event.key === "ArrowLeft" || event.key === "Home" ? "vault" : "settings";
+  showAppPage(nextPage);
+  (nextPage === "vault" ? els.vaultNavButton : els.settingsNavButton).focus();
+}
+
+function handleAuthModeKeydown(event) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const nextMode = event.key === "ArrowLeft" || event.key === "Home" ? "login" : "register";
+  setAuthMode(nextMode);
+  (nextMode === "login" ? els.loginModeButton : els.registerButton).focus();
+}
+
+function handleSettingsTabClick(event) {
+  const button = event.target.closest("button[data-settings-tab]");
+  if (!button) return;
+  showSettingsSection(button.dataset.settingsTab);
+}
+
+function handleSettingsTabKeydown(event) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const tabs = getAvailableSettingsTabs();
+  if (!tabs.length) return;
+  event.preventDefault();
+  const currentIndex = Math.max(0, tabs.findIndex((button) => button.dataset.active === "true"));
+  let nextIndex = currentIndex;
+  if (event.key === "ArrowLeft") nextIndex = Math.max(0, currentIndex - 1);
+  if (event.key === "ArrowRight") nextIndex = Math.min(tabs.length - 1, currentIndex + 1);
+  if (event.key === "Home") nextIndex = 0;
+  if (event.key === "End") nextIndex = tabs.length - 1;
+  showSettingsSection(tabs[nextIndex].dataset.settingsTab);
+  tabs[nextIndex].focus();
+}
+
+function getAvailableSettingsTabs() {
+  return Array.from(els.settingsTabs.querySelectorAll("button[data-settings-tab]:not(.hidden)"));
+}
+
+function showSettingsSection(section) {
+  const nextSection = section === "admin" && !state.user?.isAdmin ? "security" : section || "security";
+  state.settingsSection = nextSection;
+
+  for (const button of els.settingsTabs.querySelectorAll("button[data-settings-tab]")) {
+    const active = button.dataset.settingsTab === nextSection;
+    button.dataset.active = active ? "true" : "false";
+    button.setAttribute("aria-selected", active ? "true" : "false");
+    button.tabIndex = active ? 0 : -1;
+  }
+
+  for (const panel of els.settingsView.querySelectorAll("[data-settings-section]")) {
+    panel.classList.toggle("hidden", panel.dataset.settingsSection !== nextSection);
+  }
+}
+
+function handleEntryListKeydown(event) {
+  if (!["ArrowDown", "ArrowUp", "Home", "End", "Enter"].includes(event.key)) return;
+  const entries = getFilteredEntries();
+  if (!entries.length) return;
+  event.preventDefault();
+
+  const currentIndex = Math.max(0, entries.findIndex((entry) => entry.id === state.selectedId));
+  let nextIndex = currentIndex;
+  if (event.key === "ArrowDown") nextIndex = Math.min(entries.length - 1, currentIndex + 1);
+  if (event.key === "ArrowUp") nextIndex = Math.max(0, currentIndex - 1);
+  if (event.key === "Home") nextIndex = 0;
+  if (event.key === "End") nextIndex = entries.length - 1;
+  if (event.key === "Enter") {
+    setMobileVaultPanel("detail");
+    return;
+  }
+
+  selectEntry(entries[nextIndex].id, { openDetail: false });
+  focusEntryButton(entries[nextIndex].id);
+}
+
+function focusEntryButton(id) {
+  const button = Array.from(els.entryList.querySelectorAll("button[data-id]")).find((item) => item.dataset.id === id);
+  button?.focus();
+}
+
+function handleGlobalKeydown(event) {
+  if (!state.vault || event.defaultPrevented) return;
+  const key = event.key.toLowerCase();
+
+  if ((event.ctrlKey || event.metaKey) && key === "s") {
+    event.preventDefault();
+    saveVaultNow(true);
+    return;
+  }
+
+  if (event.key === "/" && state.appPage === "vault" && !isTextInput(event.target)) {
+    event.preventDefault();
+    showAppPage("vault");
+    setMobileVaultPanel("list");
+    els.searchInput.focus();
+    return;
+  }
+
+  if (event.key === "Escape" && state.appPage === "vault" && state.mobilePanel === "detail") {
+    setMobileVaultPanel("list");
+  }
+}
+
+function isTextInput(target) {
+  return ["INPUT", "TEXTAREA", "SELECT"].includes(target?.tagName) || target?.isContentEditable;
 }
 
 async function logoutVault() {
@@ -482,23 +695,32 @@ function lockVault() {
   state.passwordVisible = false;
   state.totpVisible = false;
   clearTimeout(state.clipboardClearTimer);
+  clearTimeout(state.passwordRevealTimer);
+  clearTimeout(state.totpRevealTimer);
 
   els.entryForm.reset();
   resetSecretVisibility();
   els.adminPanel.classList.add("hidden");
+  els.adminSettingsTab.classList.add("hidden");
   els.entryList.textContent = "";
   els.lockedView.classList.remove("hidden");
   els.appNav.classList.add("hidden");
   els.vaultView.classList.add("hidden");
   els.settingsView.classList.add("hidden");
+  clearAppHash();
   setInlineLabel(els.lockStatus, "Locked");
   setInlineIcon(els.lockStatus, "icon-lock");
   setInlineLabel(els.syncStatus, "Signed out");
   els.syncStatus.classList.add("neutral");
-  els.saveStatus.textContent = "未解锁";
+  setSaveStatus("未解锁", "locked");
   els.totpCode.textContent = "------";
   els.totpTimerBar.style.width = "0";
   updatePasswordStatus();
+}
+
+function clearAppHash() {
+  if (!location.hash) return;
+  history.replaceState(null, "", `${location.pathname}${location.search}`);
 }
 
 function lockIfHiddenTooLong() {
@@ -524,22 +746,9 @@ function lockIfIdleTooLong() {
 function renderEntries() {
   if (!state.vault) return;
 
-  const query = els.searchInput.value.trim().toLowerCase();
   els.entryList.textContent = "";
-
-  const entries = state.vault.entries.filter((entry) => {
-    const haystack = [
-      entry.name,
-      entry.login,
-      entry.backupEmail,
-      entry.backupPhone,
-      entry.tags,
-      entry.notes,
-    ]
-      .join(" ")
-      .toLowerCase();
-    return haystack.includes(query);
-  });
+  const entries = getFilteredEntries();
+  const query = els.searchInput.value.trim().toLowerCase();
 
   if (!entries.length) {
     const empty = document.createElement("div");
@@ -563,21 +772,37 @@ function renderEntries() {
   for (const entry of entries) {
     const item = els.entryTemplate.content.firstElementChild.cloneNode(true);
     item.dataset.id = entry.id;
+    item.setAttribute("role", "option");
+    item.setAttribute("aria-selected", entry.id === state.selectedId ? "true" : "false");
     item.classList.toggle("active", entry.id === state.selectedId);
     item.querySelector("strong").textContent = entry.name || "未命名账号";
     item.querySelector(".entry-meta").textContent = entry.login || entry.tags || "无登录名";
     initDecorativeIcons(item);
-    item.addEventListener("click", () => selectEntry(entry.id));
+    item.addEventListener("click", () => selectEntry(entry.id, { openDetail: true }));
     els.entryList.append(item);
   }
 }
 
-function selectEntry(id) {
+function getFilteredEntries() {
+  if (!state.vault) return [];
+  const query = els.searchInput.value.trim().toLowerCase();
+  return state.vault.entries.filter((entry) => {
+    const haystack = [entry.name, entry.login, entry.backupEmail, entry.backupPhone, entry.tags, entry.notes]
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(query);
+  });
+}
+
+function selectEntry(id, options = {}) {
   state.selectedId = id;
   const entry = getSelectedEntry();
   els.entryForm.reset();
   resetSecretVisibility();
   setFormDisabled(!entry);
+  els.entryForm.classList.toggle("hidden", !entry);
+  els.detailBottomBar.classList.toggle("hidden", !entry);
+  els.detailEmptyState.classList.toggle("hidden", Boolean(entry));
 
   if (entry) {
     els.entryName.value = entry.name;
@@ -589,6 +814,12 @@ function selectEntry(id) {
     els.entryTotpSecret.value = entry.totpSecret;
     els.entryRecoveryCodes.value = entry.recoveryCodes;
     els.entryNotes.value = entry.notes;
+  }
+
+  if (entry && options.openDetail !== false) {
+    setMobileVaultPanel("detail");
+  } else if (!entry) {
+    setMobileVaultPanel("detail");
   }
 
   renderEntries();
@@ -639,9 +870,10 @@ function addEntry() {
   if (!state.vault) return;
   const entry = createEntryRecord("新账号");
   state.vault.entries.unshift(entry);
-  selectEntry(entry.id);
+  selectEntry(entry.id, { openDetail: true });
   els.entryName.focus();
   markDirty();
+  showToast("已新增账号", { message: "填写后会自动保存。" });
 }
 
 function createEntryRecord(name) {
@@ -676,8 +908,9 @@ async function deleteSelectedEntry() {
   }
 
   state.vault.entries = state.vault.entries.filter((item) => item.id !== entry.id);
-  selectEntry(state.vault.entries[0]?.id || null);
+  selectEntry(state.vault.entries[0]?.id || null, { openDetail: Boolean(state.vault.entries.length) });
   markDirty();
+  showToast("账号已删除", { tone: "warning" });
 }
 
 function fillGeneratedPassword() {
@@ -716,6 +949,8 @@ function togglePassword() {
   els.entryPassword.type = state.passwordVisible ? "text" : "password";
   setInlineLabel(els.togglePasswordButton, state.passwordVisible ? "隐藏" : "显示");
   setInlineIcon(els.togglePasswordButton, state.passwordVisible ? "icon-eye-off" : "icon-eye");
+  els.togglePasswordButton.setAttribute("aria-pressed", state.passwordVisible ? "true" : "false");
+  scheduleSecretAutoHide("password");
 }
 
 function toggleTotp() {
@@ -723,12 +958,40 @@ function toggleTotp() {
   els.entryTotpSecret.type = state.totpVisible ? "text" : "password";
   setInlineLabel(els.toggleTotpButton, state.totpVisible ? "隐藏" : "显示");
   setInlineIcon(els.toggleTotpButton, state.totpVisible ? "icon-eye-off" : "icon-eye");
+  els.toggleTotpButton.setAttribute("aria-pressed", state.totpVisible ? "true" : "false");
+  scheduleSecretAutoHide("totp");
+}
+
+function scheduleSecretAutoHide(kind) {
+  const visible = kind === "password" ? state.passwordVisible : state.totpVisible;
+  const timerKey = kind === "password" ? "passwordRevealTimer" : "totpRevealTimer";
+  clearTimeout(state[timerKey]);
+  if (!visible) return;
+  state[timerKey] = window.setTimeout(() => hideSecret(kind), SECRET_REVEAL_MS);
+}
+
+function hideSecret(kind) {
+  if (kind === "password" && state.passwordVisible) {
+    state.passwordVisible = false;
+    els.entryPassword.type = "password";
+    setInlineLabel(els.togglePasswordButton, "显示");
+    setInlineIcon(els.togglePasswordButton, "icon-eye");
+    els.togglePasswordButton.setAttribute("aria-pressed", "false");
+  }
+
+  if (kind === "totp" && state.totpVisible) {
+    state.totpVisible = false;
+    els.entryTotpSecret.type = "password";
+    setInlineLabel(els.toggleTotpButton, "显示");
+    setInlineIcon(els.toggleTotpButton, "icon-eye");
+    els.toggleTotpButton.setAttribute("aria-pressed", "false");
+  }
 }
 
 function markDirty() {
   if (!state.vault) return;
   state.dirty = true;
-  els.saveStatus.textContent = "未保存";
+  setSaveStatus("未保存", "dirty");
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(() => saveVaultNow(false), 700);
 }
@@ -740,24 +1003,36 @@ async function saveVaultNow(manual) {
   state.saveTimer = null;
   state.saving = true;
   updateBusyControls();
-  els.saveStatus.textContent = "正在保存…";
+  setSaveStatus("正在保存…", "saving");
   try {
     state.vault.updatedAt = new Date().toISOString();
     const envelope = await encryptVault(state.vault, state.key);
     envelope.remoteRevision = state.remoteRevision;
     writeLocalEnvelope(envelope);
+
+    if (!state.online) {
+      state.dirty = true;
+      setSaveStatus("离线：已保存到本机", "offline");
+      if (manual) showToast("已保存到本机", { message: "联网后再保存即可同步到 Cloudflare。", tone: "warning" });
+      return false;
+    }
+
     const saved = await putRemoteEnvelope(envelope, state.remoteRevision);
     state.remoteRevision = saved.revision;
     envelope.remoteRevision = saved.revision;
     envelope.updatedAt = saved.updatedAt || envelope.updatedAt;
     writeLocalEnvelope(envelope);
     state.dirty = false;
-    els.saveStatus.textContent = "已同步到 Cloudflare";
+    setSaveStatus("已同步到 Cloudflare", "synced");
+    if (manual) showToast("已同步", { message: "加密密文已保存到 Cloudflare。", tone: "success" });
     return true;
   } catch (error) {
     state.dirty = true;
-    els.saveStatus.textContent = error.message || "保存失败";
-    if (manual) await alertDialog(els.saveStatus.textContent, { title: "保存失败" });
+    const conflict = error.status === 409;
+    const message = conflict ? "远端有更新，需先拉取" : error.message || "保存失败";
+    setSaveStatus(message, conflict ? "conflict" : "error");
+    showToast(conflict ? "保存冲突" : "保存失败", { message, tone: "danger" });
+    if (manual) await alertDialog(message, { title: conflict ? "保存冲突" : "保存失败" });
     return false;
   } finally {
     state.saving = false;
@@ -768,6 +1043,11 @@ async function saveVaultNow(manual) {
 async function pullRemoteVault() {
   if (!state.user || !state.key) return;
   if (state.pulling) return;
+  if (!state.online) {
+    setSaveStatus("离线：无法拉取远端", "offline");
+    showToast("当前离线", { message: "联网后再拉取 Cloudflare 密文。", tone: "warning" });
+    return;
+  }
   if (
     state.dirty &&
     !(await confirmDialog("当前有未保存修改，继续拉取会覆盖本地内容。继续？", {
@@ -782,15 +1062,17 @@ async function pullRemoteVault() {
   try {
     state.pulling = true;
     updateBusyControls();
-    els.saveStatus.textContent = "正在拉取…";
+    setSaveStatus("正在拉取…", "saving");
     const remote = await fetchRemoteVault();
     if (!remote.envelope) {
-      els.saveStatus.textContent = "远端没有保险箱";
+      setSaveStatus("远端没有保险箱", "neutral");
+      showToast("远端没有保险箱", { tone: "warning" });
       return;
     }
 
     if (remote.envelope.kdf.salt !== bytesToBase64(state.salt)) {
-      els.saveStatus.textContent = "远端保险箱需要重新登录解锁";
+      setSaveStatus("远端保险箱需要重新登录", "error");
+      showToast("需要重新登录", { message: "远端密文使用了不同主密码。", tone: "danger" });
       return;
     }
 
@@ -800,10 +1082,14 @@ async function pullRemoteVault() {
     remote.envelope.remoteRevision = remote.revision;
     writeLocalEnvelope(remote.envelope);
     renderEntries();
-    selectEntry(state.vault.entries[0]?.id || null);
-    els.saveStatus.textContent = "已拉取远端密文";
+    selectEntry(state.vault.entries[0]?.id || null, { openDetail: false });
+    setMobileVaultPanel("list");
+    setSaveStatus("已拉取远端密文", "synced");
+    showToast("已拉取远端密文", { tone: "success" });
   } catch (error) {
-    els.saveStatus.textContent = error.message || "拉取失败";
+    const message = error.message || "拉取失败";
+    setSaveStatus(message, "error");
+    showToast("拉取失败", { message, tone: "danger" });
   } finally {
     state.pulling = false;
     updateBusyControls();
@@ -823,9 +1109,9 @@ async function exportVaultBackup() {
     link.download = `account-vault-${new Date().toISOString().slice(0, 10)}.json`;
     link.click();
     URL.revokeObjectURL(url);
-    els.saveStatus.textContent = "已导出加密备份";
+    showToast("已导出加密备份", { message: link.download, tone: "success" });
   } catch (error) {
-    els.saveStatus.textContent = error.message || "导出失败";
+    showToast("导出失败", { message: error.message || "无法生成备份文件。", tone: "danger" });
   }
 }
 
@@ -850,8 +1136,9 @@ async function importVaultBackup() {
     const salt = base64ToBytes(envelope.kdf.salt);
     const key = await deriveVaultKey(password, salt, envelope.kdf.iterations);
     const vault = normalizeVault(await decryptVault(envelope, key));
+    const entryCount = vault.entries.length;
     if (
-      !(await confirmDialog("导入会替换当前保险箱内容。继续？", {
+      !(await confirmDialog(`将导入“${file.name}”中的 ${entryCount} 个账号，并替换当前保险箱内容。继续？`, {
         title: "导入备份",
         confirmLabel: "继续导入",
         danger: true,
@@ -867,10 +1154,12 @@ async function importVaultBackup() {
     state.remoteRevision = envelope.remoteRevision || state.remoteRevision;
     state.dirty = true;
     renderEntries();
-    selectEntry(state.vault.entries[0]?.id || null);
+    selectEntry(state.vault.entries[0]?.id || null, { openDetail: false });
+    setMobileVaultPanel("list");
     await saveVaultNow(true);
+    showToast("备份已导入", { message: `${entryCount} 个账号`, tone: "success" });
   } catch (error) {
-    els.saveStatus.textContent = error.message || "导入失败";
+    showToast("导入失败", { message: error.message || "无法读取备份文件。", tone: "danger" });
   }
 }
 
@@ -889,7 +1178,7 @@ async function changeMasterPassword() {
   state.saving = true;
   updateBusyControls();
   try {
-    els.saveStatus.textContent = "正在修改主密码…";
+    setSaveStatus("正在修改主密码…", "saving");
     const authSecret = await makeAuthSecret(state.user.email, passwords.currentPassword);
     const newAuthSecret = await makeAuthSecret(state.user.email, passwords.nextPassword);
     const nextSalt = crypto.getRandomValues(new Uint8Array(16));
@@ -916,9 +1205,12 @@ async function changeMasterPassword() {
     envelope.updatedAt = changed.updatedAt || envelope.updatedAt;
     writeLocalEnvelope(envelope);
     state.dirty = false;
-    els.saveStatus.textContent = "主密码已修改并同步";
+    setSaveStatus("主密码已修改并同步", "synced");
+    showToast("主密码已修改", { message: "保险箱已用新主密码重新加密。", tone: "success" });
   } catch (error) {
-    els.saveStatus.textContent = error.message || "主密码修改失败";
+    const message = error.message || "主密码修改失败";
+    setSaveStatus(message, "error");
+    showToast("主密码修改失败", { message, tone: "danger" });
   } finally {
     state.saving = false;
     updateBusyControls();
@@ -1456,27 +1748,31 @@ function isVaultEnvelope(value) {
   );
 }
 
-async function copyInputValue(inputId) {
+async function copyInputValue(inputId, button = null) {
   const input = $(inputId);
   if (!input?.value) {
-    els.saveStatus.textContent = "没有可复制的内容";
+    showToast("没有可复制的内容", { tone: "warning" });
     return;
   }
 
   try {
-    await copyText(input.value);
-    els.saveStatus.textContent = "已复制";
+    if (!(await copyText(input.value))) {
+      input.select();
+      document.execCommand("copy");
+    }
   } catch {
     input.select();
     document.execCommand("copy");
-    els.saveStatus.textContent = "已复制";
   }
+  flashButtonLabel(button, "已复制");
+  showToast("已复制", { message: "剪贴板会在 30 秒后尝试清空。", tone: "success" });
 }
 
 async function copyText(text) {
-  if (!navigator.clipboard?.writeText) return;
+  if (!navigator.clipboard?.writeText) return false;
   await navigator.clipboard.writeText(text);
   scheduleClipboardClear(text);
+  return true;
 }
 
 function scheduleClipboardClear(value) {
@@ -1492,6 +1788,62 @@ function scheduleClipboardClear(value) {
       // Clipboard read permission is browser-controlled.
     }
   }, CLIPBOARD_CLEAR_MS);
+}
+
+function setSaveStatus(message, status = "neutral") {
+  if (!hasDocument || !els.saveStatus) return;
+  els.saveStatus.textContent = message;
+  els.saveStatus.dataset.state = status;
+  els.saveStatus.classList.toggle("neutral", status === "neutral" || status === "locked");
+}
+
+function showToast(title, options = {}) {
+  if (!hasDocument || !els.toastRegion || !title) return;
+  const tone = options.tone || "info";
+  const iconId =
+    tone === "success" ? "icon-check-circle" : tone === "danger" || tone === "warning" ? "icon-alert-circle" : "icon-shield";
+  const toast = document.createElement("div");
+  const iconWrap = document.createElement("span");
+  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+  const copy = document.createElement("div");
+  const heading = document.createElement("strong");
+
+  toast.className = "toast";
+  toast.dataset.tone = tone;
+  toast.setAttribute("role", tone === "danger" ? "alert" : "status");
+  iconWrap.className = "section-icon";
+  icon.classList.add("icon");
+  use.setAttribute("href", `#${iconId}`);
+  icon.append(use);
+  iconWrap.append(icon);
+  heading.textContent = title;
+  copy.append(heading);
+
+  if (options.message) {
+    const message = document.createElement("span");
+    message.textContent = options.message;
+    copy.append(message);
+  }
+
+  toast.append(iconWrap, copy);
+  initDecorativeIcons(toast);
+  els.toastRegion.prepend(toast);
+
+  window.setTimeout(() => {
+    toast.style.opacity = "0";
+    toast.style.transform = "translateY(8px)";
+    window.setTimeout(() => toast.remove(), 180);
+  }, options.duration || TOAST_DURATION_MS);
+}
+
+function flashButtonLabel(button, label) {
+  if (!button) return;
+  const current = button.querySelector("span:not(.sr-only)")?.textContent || "";
+  const original = button.dataset.originalLabel || current;
+  button.dataset.originalLabel = original;
+  setInlineLabel(button, label);
+  window.setTimeout(() => setInlineLabel(button, original), 1600);
 }
 
 function normalizeEmail(email) {
@@ -1540,12 +1892,14 @@ function setAuthButtonsDisabled(disabled) {
 
 function updateBusyControls() {
   els.saveButton.disabled = state.saving || state.pulling;
-  els.pullButton.disabled = state.saving || state.pulling;
+  els.pullButton.disabled = state.saving || state.pulling || !state.online;
   els.lockButton.disabled = state.saving;
   els.changePasswordButton.disabled = state.saving || state.pulling;
 }
 
 function resetSecretVisibility() {
+  clearTimeout(state.passwordRevealTimer);
+  clearTimeout(state.totpRevealTimer);
   state.passwordVisible = false;
   state.totpVisible = false;
   els.entryPassword.type = "password";
@@ -1554,6 +1908,8 @@ function resetSecretVisibility() {
   setInlineIcon(els.togglePasswordButton, "icon-eye");
   setInlineLabel(els.toggleTotpButton, "显示");
   setInlineIcon(els.toggleTotpButton, "icon-eye");
+  els.togglePasswordButton.setAttribute("aria-pressed", "false");
+  els.toggleTotpButton.setAttribute("aria-pressed", "false");
 }
 
 export {

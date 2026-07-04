@@ -139,6 +139,33 @@ select {
   white-space: nowrap;
 }
 
+.skip-link {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 50;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 600;
+  opacity: 0;
+  padding: 9px 12px;
+  text-decoration: none;
+  transform: translateY(-12px);
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+  pointer-events: none;
+}
+
+.skip-link:focus {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
 button {
   appearance: none;
   display: inline-flex;
@@ -431,6 +458,27 @@ h2 {
   border-color: var(--color-border-subtle);
   background: var(--color-surface-soft);
   color: var(--color-text-secondary);
+}
+
+.status-pill[data-state="dirty"],
+.status-pill[data-state="saving"],
+.status-pill[data-state="offline"] {
+  border-color: var(--color-warning);
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+
+.status-pill[data-state="synced"] {
+  border-color: var(--color-accent-border);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.status-pill[data-state="error"],
+.status-pill[data-state="conflict"] {
+  border-color: var(--color-danger);
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
 }
 
 .panel {
@@ -754,7 +802,43 @@ html[data-theme="dark"] .auth-mode button[data-active="true"] {
 
 .detail-panel {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.mobile-detail-bar {
+  display: none;
+  border-bottom: 1px solid var(--color-border-subtle);
+  padding: 12px 14px;
+}
+
+.mobile-detail-bar button {
+  min-height: 38px;
+}
+
+.detail-empty {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 10px;
+  min-height: 360px;
+  padding: 28px;
+  color: var(--color-text-tertiary);
+  text-align: center;
+}
+
+.detail-empty strong {
+  color: var(--color-text);
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.detail-empty span:not(.section-icon) {
+  max-width: 320px;
+  font-size: 13px;
+}
+
+.detail-empty button {
+  margin-top: 8px;
 }
 
 .settings-view {
@@ -767,6 +851,38 @@ html[data-theme="dark"] .auth-mode button[data-active="true"] {
   align-items: end;
   justify-content: space-between;
   gap: 16px;
+}
+
+.settings-tabs {
+  display: inline-flex;
+  width: max-content;
+  max-width: 100%;
+  align-items: center;
+  gap: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-muted);
+  padding: 3px;
+}
+
+.settings-tabs button {
+  min-height: 34px;
+  border-color: transparent;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  padding: 0 12px;
+}
+
+.settings-tabs button[data-active="true"] {
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--shadow-xs);
+}
+
+.settings-tabs .icon {
+  width: 15px;
+  height: 15px;
 }
 
 .settings-grid {
@@ -1104,8 +1220,87 @@ html[data-theme="dark"] .app-dialog[data-danger="true"] button.primary {
   color: #0d0d0d;
 }
 
+.toast-region {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 40;
+  display: grid;
+  width: min(360px, calc(100vw - 32px));
+  gap: 10px;
+  pointer-events: none;
+}
+
+.toast {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--shadow-sm);
+  font-size: 14px;
+  line-height: 1.45;
+  padding: 12px 13px;
+  animation: slide-up 180ms ease-out;
+}
+
+.toast .section-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+}
+
+.toast strong,
+.toast span {
+  display: block;
+  min-width: 0;
+}
+
+.toast strong {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.toast span {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.toast[data-tone="success"] .section-icon {
+  border-color: var(--color-accent-border);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.toast[data-tone="warning"] .section-icon {
+  border-color: var(--color-warning);
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+
+.toast[data-tone="danger"] .section-icon {
+  border-color: var(--color-danger);
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
 .hidden {
   display: none !important;
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @keyframes pop-in {
@@ -1156,6 +1351,19 @@ html[data-theme="dark"] .app-dialog[data-danger="true"] button.primary {
     width: 100%;
   }
 
+  .status-strip {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .status-pill {
+    max-width: none;
+  }
+
+  .theme-toggle {
+    justify-self: end;
+  }
+
   .app-nav button {
     flex: 1 1 0;
   }
@@ -1170,7 +1378,24 @@ html[data-theme="dark"] .app-dialog[data-danger="true"] button.primary {
   }
 
   .list-panel {
-    max-height: 340px;
+    max-height: none;
+    min-height: calc(100vh - 236px);
+  }
+
+  .vault-grid[data-mobile-panel="list"] .detail-panel {
+    display: none;
+  }
+
+  .vault-grid[data-mobile-panel="detail"] .list-panel {
+    display: none;
+  }
+
+  .mobile-detail-bar {
+    display: flex;
+  }
+
+  .detail-empty {
+    min-height: calc(100vh - 260px);
   }
 
   .field-grid,
@@ -1190,6 +1415,14 @@ html[data-theme="dark"] .app-dialog[data-danger="true"] button.primary {
   .settings-heading {
     align-items: start;
     display: grid;
+  }
+
+  .settings-tabs {
+    width: 100%;
+  }
+
+  .settings-tabs button {
+    flex: 1 1 0;
   }
 
   .settings-actions {
@@ -1218,6 +1451,12 @@ html[data-theme="dark"] .app-dialog[data-danger="true"] button.primary {
 
   .unlock-panel .button-row {
     grid-template-columns: 1fr;
+  }
+
+  .toast-region {
+    right: 10px;
+    bottom: 10px;
+    width: calc(100vw - 20px);
   }
 }
 
