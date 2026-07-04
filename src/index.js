@@ -21,6 +21,7 @@ const RATE_LIMITS = {
   vaultWrite: { limit: 60, windowSeconds: 60 },
   adminSettings: { limit: 20, windowSeconds: 60 },
   passwordChange: { limit: 5, windowSeconds: 15 * 60 },
+  passwordVerify: { limit: 10, windowSeconds: 15 * 60 },
   sessionRevoke: { limit: 5, windowSeconds: 15 * 60 },
 };
 
@@ -120,6 +121,20 @@ async function handleApi(request, env, url) {
     );
     if (limited) return limited;
     return changePassword(request, env, user);
+  }
+
+  if (url.pathname === "/api/auth/verify-password" && request.method === "POST") {
+    const user = await requireSessionUser(request, env);
+    if (user instanceof Response) return user;
+    const limited = await enforceRateLimit(
+      env,
+      "password-verify",
+      user.id,
+      RATE_LIMITS.passwordVerify.limit,
+      RATE_LIMITS.passwordVerify.windowSeconds,
+    );
+    if (limited) return limited;
+    return verifyCurrentPassword(request, env, user);
   }
 
   if (url.pathname === "/api/auth/me" && request.method === "GET") {
@@ -485,6 +500,28 @@ async function changePassword(request, env, user) {
   logSecurityEvent("password_changed", { userId: user.id });
   await recordAuditEvent(env, "password_changed", { userId: user.id });
   return json({ ok: true, updatedAt, revision });
+}
+
+async function verifyCurrentPassword(request, env, user) {
+  const body = await readJsonBody(request, MAX_AUTH_BYTES);
+  if (body instanceof Response) return body;
+  const authSecret = decodeAuthSecret(body.authSecret);
+  if (!authSecret) {
+    return json({ error: "Auth secret is invalid." }, 400);
+  }
+
+  const verified = await verifyAuthSecret(env, user, authSecret);
+  if (!verified) {
+    logSecurityEvent("reauth_failed", { userId: user.id });
+    await recordAuditEvent(env, "reauth_failed", { userId: user.id });
+    return json({ error: "Current password is invalid." }, 401);
+  }
+
+  if (verified.upgradedUser) {
+    await env.VAULT.put(userKey(verified.upgradedUser.id), JSON.stringify(verified.upgradedUser));
+  }
+  logSecurityEvent("reauth_succeeded", { userId: user.id });
+  return json({ ok: true });
 }
 
 async function getAdminSettings(env) {

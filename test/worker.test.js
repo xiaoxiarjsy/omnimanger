@@ -312,6 +312,34 @@ test("change password invalidates old login and accepts new login", async () => 
   assert.equal(vault.envelope.cipher.data, "bmV3LXBhc3N3b3JkLWNpcGhlcg==");
 });
 
+test("session user can verify current password before dangerous actions", async () => {
+  const env = makeEnv();
+  const password = "correct horse battery";
+  const registered = await register(env, "admin@example.com", password);
+  const cookie = sessionCookie(registered);
+  const authSecret = await makeAuthSecret("admin@example.com", password);
+  const wrongAuthSecret = await makeAuthSecret("admin@example.com", "wrong horse battery");
+
+  const verified = await worker.fetch(
+    jsonRequest("/api/auth/verify-password", { authSecret }, { cookie }),
+    env,
+  );
+  assert.equal(verified.status, 200);
+  assert.deepEqual(await verified.json(), { ok: true });
+
+  const rejected = await worker.fetch(
+    jsonRequest("/api/auth/verify-password", { authSecret: wrongAuthSecret }, { cookie }),
+    env,
+  );
+  assert.equal(rejected.status, 401);
+
+  const anonymous = await worker.fetch(
+    jsonRequest("/api/auth/verify-password", { authSecret }),
+    env,
+  );
+  assert.equal(anonymous.status, 401);
+});
+
 test("logout all revokes existing session cookies", async () => {
   const env = makeEnv();
   const password = "correct horse battery";

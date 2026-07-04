@@ -13,6 +13,7 @@ const {
   generateTotp,
   getEntryRiskScore,
   getVaultTags,
+  isBackupStale,
   isVaultEnvelope,
   mergeImportedVault,
   normalizeEmail,
@@ -172,4 +173,10 @@ test("entry risk score prioritizes missing and duplicated secrets", () => {
 
   assert.ok(getEntryRiskScore(vault.entries[1], vault) > getEntryRiskScore(vault.entries[0], vault));
   assert.ok(getEntryRiskScore(vault.entries[2], vault) > getEntryRiskScore(vault.entries[0], vault));
+});
+
+test("backup stale helper flags missing or old exports", () => {
+  assert.equal(isBackupStale(""), true);
+  assert.equal(isBackupStale(new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString()), true);
+  assert.equal(isBackupStale(new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()), false);
 });

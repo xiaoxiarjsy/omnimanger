@@ -1074,6 +1074,37 @@ html[data-theme="dark"] .auth-mode button[data-active="true"] {
   padding-top: 12px;
 }
 
+.backup-status {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-soft);
+  padding: 10px 11px;
+}
+
+.backup-status[data-state="ok"] {
+  border-color: var(--color-accent-border);
+  background: var(--color-accent-soft);
+}
+
+.backup-status[data-state="warning"] {
+  border-color: var(--color-warning);
+  background: var(--color-warning-soft);
+}
+
+.backup-status strong {
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.backup-status span {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .security-summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));

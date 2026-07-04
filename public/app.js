@@ -6,6 +6,8 @@ const CACHE_DISABLED_KEY = "account-secret-vault.cache-disabled";
 const PASSWORD_OPTIONS_KEY = "account-secret-vault.password-options";
 const IMPORT_MODE_KEY = "account-secret-vault.import-mode";
 const ENTRY_SORT_KEY = "account-secret-vault.entry-sort";
+const BACKUP_REMINDER_DAYS = 7;
+const BACKUP_REMINDER_MS = BACKUP_REMINDER_DAYS * 24 * 60 * 60 * 1000;
 const KDF_ITERATIONS = 310000;
 const AUTH_KDF_ITERATIONS = 120000;
 const CLIPBOARD_CLEAR_MS = 30_000;
@@ -44,6 +46,7 @@ const state = {
   selectedTag: "",
   importMode: "merge",
   entrySort: "updated",
+  backupReminderShown: false,
   online: true,
 };
 
@@ -111,6 +114,9 @@ const els = hasDocument
       importButton: $("importButton"),
       importModeSelect: $("importModeSelect"),
       exportButton: $("exportButton"),
+      backupStatus: $("backupStatus"),
+      backupStatusTitle: $("backupStatusTitle"),
+      backupStatusDetail: $("backupStatusDetail"),
       changePasswordButton: $("changePasswordButton"),
       logoutAllButton: $("logoutAllButton"),
       securitySummary: $("securitySummary"),
@@ -578,6 +584,8 @@ function showVault() {
   els.syncStatus.classList.remove("neutral");
   els.sessionStatus.classList.remove("hidden");
   updateSessionStatus();
+  renderBackupStatus();
+  maybeShowBackupReminder();
 
   if (state.user.isAdmin) {
     els.adminPanel.classList.remove("hidden");
@@ -790,6 +798,14 @@ async function logoutAllSessions() {
     danger: true,
   });
   if (!confirmed) return;
+  if (
+    !(await requireCurrentPassword("重新输入当前主密码，确认退出所有设备。", {
+      title: "验证主密码",
+      confirmLabel: "确认退出",
+    }))
+  ) {
+    return;
+  }
 
   try {
     const response = await fetch("/api/auth/logout-all", { method: "POST", credentials: "same-origin" });
@@ -812,6 +828,7 @@ function lockVault() {
   state.remoteRevision = null;
   state.passwordVisible = false;
   state.totpVisible = false;
+  state.backupReminderShown = false;
   clearTimeout(state.clipboardClearTimer);
   clearTimeout(state.passwordRevealTimer);
   clearTimeout(state.totpRevealTimer);
@@ -1543,6 +1560,14 @@ async function pullRemoteVault(options = {}) {
 
 async function exportVaultBackup() {
   if (!state.user || !state.vault || !state.key) return;
+  if (
+    !(await requireCurrentPassword("导出文件包含加密后的完整保险箱。请重新输入当前主密码。", {
+      title: "验证主密码",
+      confirmLabel: "导出",
+    }))
+  ) {
+    return;
+  }
 
   try {
     const envelope = await encryptVault(state.vault, state.key);
@@ -1555,6 +1580,7 @@ async function exportVaultBackup() {
     link.download = `account-vault-${new Date().toISOString().slice(0, 10)}.json`;
     link.click();
     URL.revokeObjectURL(url);
+    recordBackupExport();
     showToast("已导出并校验备份", { message: link.download, tone: "success" });
   } catch (error) {
     showToast("导出失败", { message: error.message || "无法生成备份文件。", tone: "danger" });
@@ -1593,6 +1619,16 @@ async function importVaultBackup() {
         title: "导入备份",
         confirmLabel: "继续导入",
         danger: importMode === "replace",
+      }))
+    ) {
+      return;
+    }
+
+    if (
+      importMode === "replace" &&
+      !(await requireCurrentPassword("整体替换会覆盖当前保险箱。请重新输入当前主密码。", {
+        title: "验证主密码",
+        confirmLabel: "确认替换",
       }))
     ) {
       return;
@@ -1768,6 +1804,81 @@ async function postJson(url, body) {
   return data;
 }
 
+async function requireCurrentPassword(message, options = {}) {
+  if (!state.user?.email) return false;
+  const password = await promptPasswordDialog(message, {
+    title: options.title || "验证主密码",
+    label: "当前主密码",
+    autocomplete: "current-password",
+    confirmLabel: options.confirmLabel || "验证",
+  });
+  if (!password) return false;
+
+  try {
+    const authSecret = await makeAuthSecret(state.user.email, password);
+    await postJson("/api/auth/verify-password", { authSecret });
+    return true;
+  } catch (error) {
+    showToast("主密码验证失败", { message: error.message || "请确认后再试。", tone: "danger" });
+    return false;
+  }
+}
+
+function recordBackupExport() {
+  if (!state.user) return;
+  const timestamp = new Date().toISOString();
+  localStorage.setItem(getBackupStatusKey(state.user.id), timestamp);
+  renderBackupStatus();
+}
+
+function renderBackupStatus() {
+  if (!hasDocument || !els.backupStatus || !state.user) return;
+  const lastBackupAt = getLastBackupAt();
+  const stale = isBackupStale(lastBackupAt);
+  els.backupStatus.dataset.state = stale ? "warning" : "ok";
+  if (!lastBackupAt) {
+    els.backupStatusTitle.textContent = "还没有导出备份";
+    els.backupStatusDetail.textContent = "建议先导出一份备份文件，并保存在安全位置。";
+    return;
+  }
+
+  const backupTimeText = formatDateTime(lastBackupAt) || "未知";
+  els.backupStatusTitle.textContent = stale ? "建议更新备份" : "备份状态正常";
+  els.backupStatusDetail.textContent = `上次导出：${backupTimeText}。${stale ? `已超过 ${BACKUP_REMINDER_DAYS} 天。` : "当前不需要额外操作。"}`;
+}
+
+function maybeShowBackupReminder() {
+  if (!state.user || state.backupReminderShown) return;
+  const userId = state.user.id;
+  const lastBackupAt = getLastBackupAt();
+  if (!isBackupStale(lastBackupAt)) return;
+  state.backupReminderShown = true;
+  window.setTimeout(() => {
+    if (!state.user || state.user.id !== userId) return;
+    showToast("建议导出备份", {
+      message: lastBackupAt ? `上次导出已超过 ${BACKUP_REMINDER_DAYS} 天。` : "当前账号还没有导出过备份。",
+      tone: "warning",
+      duration: 6000,
+    });
+  }, 600);
+}
+
+function getLastBackupAt() {
+  if (!state.user) return "";
+  return localStorage.getItem(getBackupStatusKey(state.user.id)) || "";
+}
+
+function isBackupStale(value) {
+  if (!value) return true;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return true;
+  return Date.now() - date.getTime() > BACKUP_REMINDER_MS;
+}
+
+function getBackupStatusKey(userId) {
+  return `account-secret-vault.last-backup.${userId}`;
+}
+
 function formatAuthError(error) {
   const retryAfter = Number(error?.data?.retryAfter || 0);
   if (error?.status === 429 && retryAfter > 0) {
@@ -1798,6 +1909,17 @@ async function loadAdminSettings() {
 }
 
 async function saveAdminSettings() {
+  const desiredRegistrationOpen = els.registrationOpenToggle.checked;
+  if (
+    !(await requireCurrentPassword("修改注册入口会影响新用户访问。请重新输入当前主密码。", {
+      title: "验证管理员操作",
+      confirmLabel: "保存设置",
+    }))
+  ) {
+    els.registrationOpenToggle.checked = !desiredRegistrationOpen;
+    return;
+  }
+
   try {
     els.adminSettingsStatus.textContent = "正在保存注册设置...";
     const response = await fetch("/api/admin/settings", {
@@ -1806,7 +1928,7 @@ async function saveAdminSettings() {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ registrationOpen: els.registrationOpenToggle.checked }),
+      body: JSON.stringify({ registrationOpen: desiredRegistrationOpen }),
     });
     const data = await readJsonResponse(response);
     if (!response.ok) throw new Error(data.error || "无法保存管理员设置。");
@@ -1991,6 +2113,7 @@ function auditEventLabel(type) {
     login_failed: "登录失败",
     password_changed: "主密码修改",
     sessions_revoked: "退出所有设备",
+    reauth_failed: "二次验证失败",
     invite_created: "创建邀请",
     invite_revoked: "撤销邀请",
     admin_registration_setting_changed: "注册设置变更",
@@ -2632,6 +2755,7 @@ export {
   generateTotp,
   getEntryRiskScore,
   getVaultTags,
+  isBackupStale,
   isVaultEnvelope,
   makeAuthSecret,
   mergeImportedVault,
