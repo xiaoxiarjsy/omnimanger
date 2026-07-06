@@ -375,6 +375,62 @@ html[data-theme="dark"] .app-dialog[data-danger="true"] button.primary {
   }
 }
 
+@media (min-width: 640px) and (max-width: 860px) {
+  .shell {
+    width: calc(100vw - 28px);
+  }
+
+  .topbar {
+    display: grid;
+    grid-template-columns: minmax(220px, auto) minmax(0, 1fr);
+    align-items: center;
+    gap: 10px 12px;
+  }
+
+  .brand {
+    width: auto;
+  }
+
+  .app-nav {
+    justify-content: flex-end;
+  }
+
+  .status-strip {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  }
+
+  .theme-toggle {
+    width: auto;
+  }
+
+  .overview-hero {
+    grid-template-columns: minmax(0, 1fr) minmax(150px, 190px);
+  }
+
+  .overview-actions {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .overview-actions button,
+  .overview-metrics,
+  .overview-grid {
+    width: 100%;
+  }
+
+  .overview-metrics,
+  .overview-grid,
+  .settings-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .overview-panel:first-child {
+    grid-column: 1 / -1;
+  }
+}
+
 @media (max-width: 520px) {
   h1 {
     font-size: 26px;

@@ -12,6 +12,7 @@ from playwright.sync_api import sync_playwright
 BASE_URL = os.environ.get("E2E_BASE_URL", "http://127.0.0.1:8787")
 VISUAL_VIEWPORTS = [
     ("mobile", {"width": 390, "height": 844}),
+    ("tablet", {"width": 854, "height": 1392}),
     ("desktop", {"width": 1280, "height": 800}),
     ("wide", {"width": 1920, "height": 1080}),
     ("ultra", {"width": 2560, "height": 1440}),
@@ -96,6 +97,26 @@ def assert_valid_screenshot(page):
 
 def element_rect(page, selector):
     return page.locator(selector).bounding_box()
+
+
+def assert_tablet_overview_uses_two_column_metrics(page):
+    metrics = page.evaluate(
+        """() => {
+            const topbar = document.querySelector(".topbar").getBoundingClientRect();
+            const stats = Array.from(document.querySelectorAll(".overview-metrics > *"))
+                .map((element) => element.getBoundingClientRect());
+            return {
+                topbarHeight: topbar.height,
+                firstTop: Math.round(stats[0]?.top || 0),
+                secondTop: Math.round(stats[1]?.top || 0),
+                firstLeft: Math.round(stats[0]?.left || 0),
+                secondLeft: Math.round(stats[1]?.left || 0)
+            };
+        }"""
+    )
+    assert metrics["topbarHeight"] < 190, metrics
+    assert metrics["firstTop"] == metrics["secondTop"], metrics
+    assert metrics["secondLeft"] > metrics["firstLeft"], metrics
 
 
 def install_vault_api_mock(page, is_admin=False):
@@ -375,6 +396,8 @@ class VaultUiSmokeTest(unittest.TestCase):
 
                         for nav_selector in ["#overviewNavButton", "#vaultNavButton", "#settingsNavButton"]:
                             page.locator(nav_selector).click()
+                            if viewport_name == "tablet" and nav_selector == "#overviewNavButton":
+                                assert_tablet_overview_uses_two_column_metrics(page)
                             assert_no_horizontal_overflow(page)
                             assert_visible_elements_inside_viewport(page, page_selectors)
                             assert_valid_screenshot(page)
